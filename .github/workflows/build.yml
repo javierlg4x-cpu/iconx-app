@@ -1,0 +1,47 @@
+name: Compilar APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Compilar
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
+
+      - name: Renombrar APK
+        run: cp app/build/outputs/apk/release/app-release.apk IconX-Control.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IconX-Control
+          path: IconX-Control.apk
+
+      # Publica el APK como descarga directa en "Releases" (versión más reciente)
+      - name: Publicar descarga
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete ultima --yes --cleanup-tag || true
+          gh release create ultima IconX-Control.apk \
+            --target ${{ github.sha }} \
+            --title "IconX Control (compilación ${{ github.run_number }})" \
+            --notes "Descarga IconX-Control.apk desde el celular e instálalo." \
+            --latest
