@@ -25,6 +25,7 @@ import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
@@ -54,6 +55,19 @@ class MainActivity : Activity(), IconXConnection.Listener {
     private lateinit var srcPhone: RadioButton
     private lateinit var srcBuds: RadioButton
     private lateinit var storageText: TextView
+    private lateinit var volumeBar: SeekBar
+    private lateinit var volumeText: TextView
+    private lateinit var hrText: TextView
+    private lateinit var hrDetail: TextView
+    private lateinit var hrBtn: Button
+    private var measuringHr = false
+    private val hrPoll = object : Runnable {
+        override fun run() {
+            if (!measuringHr || !connected) return
+            send(Protocol.DEBUG_STATUS)
+            ui.postDelayed(this, 2000)
+        }
+    }
     private lateinit var logText: TextView
     private lateinit var controls: List<View>
 
@@ -152,6 +166,34 @@ class MainActivity : Activity(), IconXConnection.Listener {
         }
         a.addView(ambientSw)
         a.addView(autoAnswerSw)
+        volumeText = body("Volumen de los audífonos: –", 15f)
+        a.addView(volumeText)
+        volumeBar = SeekBar(this).apply {
+            max = 15
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {
+                    volumeText.text = "Volumen de los audífonos: $value / 15"
+                }
+                override fun onStartTrackingTouch(bar: SeekBar) {}
+                override fun onStopTrackingTouch(bar: SeekBar) {
+                    send(Protocol.A2DP_VOL_SET, byteArrayOf(bar.progress.toByte()))
+                }
+            })
+        }
+        a.addView(volumeBar)
+
+        // Pulso
+        val h = section(root, "PULSO")
+        hrText = body("– lpm", 30f).apply { setTypeface(typeface, Typeface.BOLD) }
+        hrDetail = body("Ponte los audífonos bien ajustados y quédate quieto mientras mide.", 13f).apply { alpha = 0.7f }
+        hrBtn = Button(this).apply {
+            text = "Medir pulso"
+            setOnClickListener { toggleHr() }
+        }
+        h.addView(hrText)
+        h.addView(hrDetail)
+        h.addView(hrBtn)
 
         // Música
         val m = section(root, "MÚSICA")
@@ -197,7 +239,7 @@ class MainActivity : Activity(), IconXConnection.Listener {
         }
         l.addView(logText)
 
-        controls = listOf(ambientSw, autoAnswerSw, srcPhone, srcBuds, shuffleSw, refresh)
+        controls = listOf(ambientSw, autoAnswerSw, volumeBar, hrBtn, srcPhone, srcBuds, shuffleSw, refresh)
 
         return ScrollView(this).apply {
             isFillViewport = true
@@ -279,6 +321,7 @@ class MainActivity : Activity(), IconXConnection.Listener {
     }
 
     private fun disconnect() {
+        if (measuringHr) toggleHr()
         conn?.close()
         conn = null
         connected = false
@@ -311,6 +354,8 @@ class MainActivity : Activity(), IconXConnection.Listener {
     override fun onDisconnected(reason: String) {
         ui.post {
         log("Desconectado: $reason")
+        measuringHr = false
+        hrBtn.text = "Medir pulso"
         conn = null
         connected = false
         statusText.text = "No se pudo conectar o se cortó la conexión. ¿Están fuera del estuche y encendidos?"
@@ -335,6 +380,7 @@ class MainActivity : Activity(), IconXConnection.Listener {
                 Protocol.STATUS_RES -> {
                     if (p.size >= 2) showBattery(p[1])
                     if (p.size >= 5) showWear(p[4])
+                    if (p.size >= 6) showVolume(p[5])
                     if (p.size >= 8) shuffleSw.isChecked = p[7].toInt() == 1
                     if (p.size >= 12) autoAnswerSw.isChecked = p[11].toInt() == 1
                     if (p.size >= 13) ambientSw.isChecked = p[12].toInt() == 1
@@ -347,6 +393,20 @@ class MainActivity : Activity(), IconXConnection.Listener {
                     if (p.size >= 2) showBattery(p[1])
                     if (p.size >= 5) showWear(p[4])
                 }
+                Protocol.A2DP_VOL_STATUS -> if (p.isNotEmpty()) showVolume(p[0])
+                Protocol.DEBUG_STATUS -> if (p.size >= 29) {
+                    val bpm = p[28].toInt() and 0xFF
+                    hrText.text = if (bpm == 0) "midiendo…" else "$bpm lpm"
+                    hrDetail.text = "Temperatura (sensor) izq: ${Protocol.leShort(p, 16)}  der: ${Protocol.leShort(p, 18)}\n" +
+                        "Movimiento izq: ${Protocol.leShort(p, 4)}, ${Protocol.leShort(p, 6)}, ${Protocol.leShort(p, 8)}  " +
+                        "der: ${Protocol.leShort(p, 10)}, ${Protocol.leShort(p, 12)}, ${Protocol.leShort(p, 14)}"
+                }
+                Protocol.EXERCISE_LIVE -> if (p.size >= 13) {
+                    val bpm = p[12].toInt() and 0xFF
+                    if (bpm > 0) hrText.text = "$bpm lpm"
+                    hrDetail.text = "Pulso en vivo durante el ejercicio"
+                }
+                Protocol.EXERCISE_STATUS -> log("Estado de ejercicio: ${p.firstOrNull()?.toInt()}")
                 Protocol.AMBIENT_STATUS -> if (p.isNotEmpty()) ambientSw.isChecked = p[0].toInt() == 1
                 Protocol.STORAGE_RSP -> if (p.size >= 18) {
                     val total = Protocol.leLong(p, 0, 8)
@@ -362,6 +422,26 @@ class MainActivity : Activity(), IconXConnection.Listener {
             }
         } finally {
             updatingFromDevice = false
+        }
+    }
+
+    private fun showVolume(b: Byte) {
+        val v = (b.toInt() and 0xFF).coerceIn(0, 15)
+        volumeBar.progress = v
+        volumeText.text = "Volumen de los audífonos: $v / 15"
+    }
+
+    private fun toggleHr() {
+        measuringHr = !measuringHr
+        // Igual que el modo de diagnóstico de la app original:
+        // encender el sensor y pedir el estado de los sensores cada 2 segundos
+        send(Protocol.ENABLE_HR, byteArrayOf(if (measuringHr) 1 else 0))
+        hrBtn.text = if (measuringHr) "Detener" else "Medir pulso"
+        if (measuringHr) {
+            hrText.text = "midiendo…"
+            ui.postDelayed(hrPoll, 1500)
+        } else {
+            ui.removeCallbacks(hrPoll)
         }
     }
 

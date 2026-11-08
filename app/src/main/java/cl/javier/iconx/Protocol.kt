@@ -18,6 +18,11 @@ object Protocol {
     const val PLAYLIST_CONFIG: Byte = 0xA2.toByte()      // aleatorio
     const val AUTOANSWER_CONFIG: Byte = 0xA4.toByte()    // contestar automático
     const val A2DP_VOL_STATUS: Byte = 0xA6.toByte()
+    const val A2DP_VOL_SET: Byte = 0xA7.toByte()         // volumen interno 0..15
+    const val EXERCISE_LIVE: Byte = 0xB6.toByte()        // datos en vivo de un ejercicio (incluye pulso)
+    const val EXERCISE_STATUS: Byte = 0xBD.toByte()
+    const val DEBUG_STATUS: Byte = 0x63                  // sensores: acelerómetros, temperatura, pulso
+    const val ENABLE_HR: Byte = 0x65                     // encender/apagar sensor de pulso
     const val AMBIENT_CONFIG: Byte = 0xAB.toByte()       // sonido ambiente (soundthrough)
     const val RESET_REQ: Byte = 0xAC.toByte()
     const val AMBIENT_STATUS: Byte = 0xAF.toByte()
@@ -98,6 +103,9 @@ object Protocol {
     }
 
     fun hex(b: ByteArray): String = b.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
+
+    fun leShort(b: ByteArray, off: Int): Int =
+        ((b[off].toInt() and 0xFF) or (b[off + 1].toInt() shl 8)).toShort().toInt()
 
     fun leLong(b: ByteArray, off: Int, n: Int): Long {
         var v = 0L
